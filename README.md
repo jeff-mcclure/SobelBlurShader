@@ -1,5 +1,5 @@
 ------------------------------------------------------------------------------
-# Sobel No Bleed Blur Shader (realfargoth)
+# Sobel No Bleed Blur Shader
 ------------------------------------------------------------------------------
 This shader darkens edges present in the scene by using the **Sobel** operator. Optionally, it **blurs** the colors in the
 scene for a watercolor-like effect. The blurring is sensitive to edges in the scene in order to minimize color bleeding
