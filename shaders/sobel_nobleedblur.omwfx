@@ -1,0 +1,331 @@
+uniform_bool uEnableBlur {
+    default = true;
+    display_name = "Enable Blur";
+	description = "Enable/Disable texture color blurring";
+}
+
+uniform_bool uEnableSobel {
+    default = true;
+    display_name = "Enable Sobel Filter";
+	description = "Enable/Disable sobel edge detection";
+}
+
+uniform_bool uExcludeSky {
+    default = true;
+    display_name = "Exclude Sky";
+	description = "Exclude sky from filter (sobel effects on night sky stars can look weird)";
+}
+
+uniform_float uEdgeColorAmount {
+	header = "Sobel Parameters";
+    step = 0.1;
+    min = 0;
+    max = 8;
+    default = 1.5;
+    display_name = "Edge Color Amount";
+	description = "Darkens color at sobel edges";
+}
+
+uniform_float uDetail {
+    step = 0.01;
+    default = 0.75;
+    min = 0.0;
+    max = 1.0;
+    display_name = "Detail";
+	description = "Saturates color at sobel edges";
+}
+
+uniform_float uDetailExp {
+    step = 0.1;
+    min = 0.1;
+    max = 5;
+    default = 1;
+    display_name = "Detail Exponent";
+	description = "Higher values dampen weak Sobel edges";
+}
+
+uniform_bool uLargeSobel {
+	default = true;
+	display_name = "5x5 Sobel";
+	description = "Enables larger sobel filter stencil, results in smoother edges and less fine detail";
+}
+
+uniform_bool uEnableRGBSobel {
+	default = true;
+	display_name = "RGB Sobel";
+	description = "Applies Sobel filter on RGB color channels separately, resulting in better edge detection";
+}
+
+uniform_bool uEnableHQBlur {
+	header = "Gaussian Blur Parameters";
+	default = true;
+	display_name = "Enable HQ Blur";
+	description = "Uses true Gaussian blur (impacts frames at high blur radii)";
+}
+
+uniform_float uGradThres {
+	step = 0.1;
+	min = 0.0;
+	max = 5.0;
+	default = 3.5;
+	display_name = "Local Var Threshold";
+	description = "Lower values keep textures from bleeding across one another, e.g. preserving fine details in NPC faces/outlines";
+}
+
+uniform_float uBlurR {
+	step = 0.5;
+	min = 0.5;
+	max = 6;
+	default = 1.5;
+	display_name = "Blur Radius";
+	description = "Blur sampling radius";
+}
+
+uniform_float uStrength {
+	step = 0.1;
+	min = -1;
+	max = 1;
+	default = 0.8;
+	display_name = "LQ Blend Strength";
+	description = "Amount Kawase blur is mixed into the scene";
+}
+
+uniform_bool uEnableGrad {
+	default = false;
+	header = "Debug";
+	display_name = "Show Sobel Edges";
+	description = "Draws the output of the Sobel filter";
+}
+
+shared
+{	
+	const float w0_n[12] = float[](0.6187,0.1592,0.0733,0.0417,0.0269,0.0202,0.0148,0.0124,0.0096,0.0077,0.0068,0.0056);
+	
+	const vec3 grayscale = vec3(0.3, 0.59, 0.11);
+	
+	// define functions
+	
+	#define saturate(x) clamp(x, 0.0f, 1.0f)
+	#define gscale(x) vec4(dot(x.rgb, grayscale))
+		
+	vec4 GetPixelColor(vec2 uv, bool is_rgb)
+	{
+		if (is_rgb) {
+			return omw_GetLastShader(uv);
+		}
+		return gscale(omw_GetLastShader(uv));
+	}
+	
+	vec4 EdgeSmartMix(vec4 cColor, vec4 mColor)
+	{
+		float diff = abs(cColor.r - mColor.r) + abs(cColor.g - mColor.g) + abs(cColor.b - mColor.b);
+		return mix(mColor, cColor, saturate(pow(diff*4*uGradThres,3)));
+	}
+}
+
+fragment sobel {
+
+    omw_In vec2 omw_TexCoord;
+		
+    void main()
+    {	
+		// get pixel color
+		
+		vec4 pixelColor = omw_GetLastPass(omw_TexCoord);
+		
+		// bypass sky
+		
+        float depth = omw_GetDepth(omw_TexCoord);
+		
+        if (uExcludeSky) {
+            if (depth == 1)
+            {
+                omw_FragColor = pixelColor;
+                return;
+            }
+        }
+		
+		// pixel step vectors
+		
+        vec2 xdisp = vec2(1.0, 0.0) * omw.rcpResolution;
+        vec2 ydisp = vec2(0.0, 1.0) * omw.rcpResolution;
+		
+		// intensity gradients
+		
+		float dX = 0.0;
+		float dY = 0.0;
+		float grad = 0.0;
+		
+        // grab surrounding px colors and apply Sobel operator	
+		
+		if (uEnableSobel){
+			vec4 sw = GetPixelColor(omw_TexCoord - xdisp - ydisp, uEnableRGBSobel);
+			vec4 w = GetPixelColor(omw_TexCoord - xdisp, uEnableRGBSobel);
+			vec4 nw = GetPixelColor(omw_TexCoord - xdisp + ydisp, uEnableRGBSobel);
+			vec4 s = GetPixelColor(omw_TexCoord - ydisp, uEnableRGBSobel);
+			vec4 n = GetPixelColor(omw_TexCoord + ydisp, uEnableRGBSobel);
+			vec4 se = GetPixelColor(omw_TexCoord + xdisp - ydisp, uEnableRGBSobel);
+			vec4 e = GetPixelColor(omw_TexCoord + xdisp, uEnableRGBSobel);
+			vec4 ne = GetPixelColor(omw_TexCoord + xdisp + ydisp, uEnableRGBSobel);
+			
+			if (uLargeSobel){
+				vec4 nn = GetPixelColor(omw_TexCoord + ydisp*2, uEnableRGBSobel);
+				vec4 nne = GetPixelColor(omw_TexCoord + ydisp*2 + xdisp, uEnableRGBSobel);
+				vec4 nnee = GetPixelColor(omw_TexCoord + ydisp*2 + xdisp*2, uEnableRGBSobel);
+				vec4 nnw = GetPixelColor(omw_TexCoord + ydisp*2 - xdisp, uEnableRGBSobel);
+				vec4 nnww = GetPixelColor(omw_TexCoord + ydisp*2 - xdisp*2, uEnableRGBSobel);
+				vec4 ss = GetPixelColor(omw_TexCoord - ydisp*2, uEnableRGBSobel);
+				vec4 sse = GetPixelColor(omw_TexCoord - ydisp*2 + xdisp, uEnableRGBSobel);
+				vec4 ssee = GetPixelColor(omw_TexCoord - ydisp*2 + xdisp*2, uEnableRGBSobel);
+				vec4 ssw = GetPixelColor(omw_TexCoord - ydisp*2 - xdisp, uEnableRGBSobel);
+				vec4 ssww = GetPixelColor(omw_TexCoord - ydisp*2 - xdisp*2, uEnableRGBSobel);
+				vec4 ee = GetPixelColor(omw_TexCoord + xdisp*2, uEnableRGBSobel);
+				vec4 een = GetPixelColor(omw_TexCoord + ydisp + xdisp*2, uEnableRGBSobel);
+				vec4 ees = GetPixelColor(omw_TexCoord - ydisp + xdisp*2, uEnableRGBSobel);
+				vec4 ww = GetPixelColor(omw_TexCoord - xdisp*2, uEnableRGBSobel);
+				vec4 wwn = GetPixelColor(omw_TexCoord + ydisp - xdisp*2, uEnableRGBSobel);
+				vec4 wws = GetPixelColor(omw_TexCoord - ydisp - xdisp*2, uEnableRGBSobel);
+				if (uEnableRGBSobel) {
+					float dX_r = (-10.0*ww.r - 20.0*w.r + 20.0*e.r + 10.0*ee.r - 8.0*wwn.r - 8.0*wws.r - 10.0*sw.r - 10.0*nw.r + 10.0*ne.r + 10.0*se.r + 8.0*een.r + 8.0*ees.r - 5.0*nnww.r - 5.0*ssww.r - 4.0*nnw.r - 4.0*ssw.r + 4.0*nne.r + 4.0*sse.r + 5.0*nnee.r + 5.0*ssee.r)/30;
+					float dY_r = (-10.0*ss.r - 20.0*s.r + 20.0*n.r + 10.0*nn.r - 8.0*sse.r - 8.0*ssw.r - 10.0*sw.r + 10.0*nw.r + 10.0*ne.r - 10.0*se.r + 8.0*nnw.r + 8.0*nne.r + 5.0*nnww.r - 5.0*ssww.r + 4.0*wwn.r - 4.0*wws.r + 4.0*een.r - 4.0*ees.r + 5.0*nnee.r - 5.0*ssee.r)/30;				
+					float dX_g = (-10.0*ww.g - 20.0*w.g + 20.0*e.g + 10.0*ee.g - 8.0*wwn.g - 8.0*wws.g - 10.0*sw.g - 10.0*nw.g + 10.0*ne.g + 10.0*se.g + 8.0*een.g + 8.0*ees.g - 5.0*nnww.g - 5.0*ssww.g - 4.0*nnw.g - 4.0*ssw.g + 4.0*nne.g + 4.0*sse.g + 5.0*nnee.g + 5.0*ssee.g)/30;
+					float dY_g = (-10.0*ss.g - 20.0*s.g + 20.0*n.g + 10.0*nn.g - 8.0*sse.g - 8.0*ssw.g - 10.0*sw.g + 10.0*nw.g + 10.0*ne.g - 10.0*se.g + 8.0*nnw.g + 8.0*nne.g + 5.0*nnww.g - 5.0*ssww.g + 4.0*wwn.g - 4.0*wws.g + 4.0*een.g - 4.0*ees.g + 5.0*nnee.g - 5.0*ssee.g)/30;				
+					float dX_b = (-10.0*ww.b - 20.0*w.b + 20.0*e.b + 10.0*ee.b - 8.0*wwn.b - 8.0*wws.b - 10.0*sw.b - 10.0*nw.b + 10.0*ne.b + 10.0*se.b + 8.0*een.b + 8.0*ees.b - 5.0*nnww.b - 5.0*ssww.b - 4.0*nnw.b - 4.0*ssw.b + 4.0*nne.b + 4.0*sse.b + 5.0*nnee.b + 5.0*ssee.b)/30;
+					float dY_b = (-10.0*ss.b - 20.0*s.b + 20.0*n.b + 10.0*nn.b - 8.0*sse.b - 8.0*ssw.b - 10.0*sw.b + 10.0*nw.b + 10.0*ne.b - 10.0*se.b + 8.0*nnw.b + 8.0*nne.b + 5.0*nnww.b - 5.0*ssww.b + 4.0*wwn.b - 4.0*wws.b + 4.0*een.b - 4.0*ees.b + 5.0*nnee.b - 5.0*ssee.b)/30;				
+					dX = sqrt((dX_r*dX_r + dX_g*dX_g + dX_b*dX_b)/3);
+					dY = sqrt((dY_r*dY_r + dY_g*dY_g + dY_b*dY_b)/3);
+				}
+				else {		
+					dX = (-10.0*ww.a - 20.0*w.a + 20.0*e.a + 10.0*ee.a - 8.0*wwn.a - 8.0*wws.a - 10.0*sw.a - 10.0*nw.a + 10.0*ne.a + 10.0*se.a + 8.0*een.a + 8.0*ees.a - 5.0*nnww.a - 5.0*ssww.a - 4.0*nnw.a - 4.0*ssw.a + 4.0*nne.a + 4.0*sse.a + 5.0*nnee.a + 5.0*ssee.a)/30;
+					dY = (-10.0*ss.a - 20.0*s.a + 20.0*n.a + 10.0*nn.a - 8.0*sse.a - 8.0*ssw.a - 10.0*sw.a + 10.0*nw.a + 10.0*ne.a - 10.0*se.a + 8.0*nnw.a + 8.0*nne.a + 5.0*nnww.a - 5.0*ssww.a + 4.0*wwn.a - 4.0*wws.a + 4.0*een.a - 4.0*ees.a + 5.0*nnee.a - 5.0*ssee.a)/30;							
+				}
+			}
+			else {
+				if (uEnableRGBSobel) {
+					float dX_r = -sw.r - 2.0*w.r - nw.r + se.r + 2.0*e.r + ne.r;
+					float dY_r = -sw.r - 2.0*s.r - se.r + nw.r + 2.0*n.r + ne.r;	
+					float dX_g = -sw.g - 2.0*w.g - nw.g + se.g + 2.0*e.g + ne.g;
+					float dY_g = -sw.g - 2.0*s.g - se.g + nw.g + 2.0*n.g + ne.g;	
+					float dX_b = -sw.b - 2.0*w.b - nw.b + se.b + 2.0*e.b + ne.b;
+					float dY_b = -sw.b - 2.0*s.b - se.b + nw.b + 2.0*n.b + ne.b;	
+					dX = sqrt((dX_r*dX_r + dX_g*dX_g + dX_b*dX_b)/3);
+					dY = sqrt((dY_r*dY_r + dY_g*dY_g + dY_b*dY_b)/3);	
+				}
+				else {
+					dX = -sw.a - 2.0*w.a - nw.a + se.a + 2.0*e.a + ne.a;
+					dY = -sw.a - 2.0*s.a - se.a + nw.a + 2.0*n.a + ne.a;	
+				}
+			}
+			
+			grad = pow(saturate(0.3*sqrt((dX*dX) + (dY*dY))), uDetailExp);
+		}
+		
+		// debug show Sobel edge detection
+		
+		if (uEnableGrad) {
+			omw_FragColor = vec4(grad, grad, grad, 1.0);
+			return;
+		}
+		
+		// apply blur
+		
+		vec4 outcolor = vec4(0.0);
+		
+		if (uEnableHQBlur && uEnableBlur) {
+			vec4 blurColor = vec4(0.0);
+			vec4 curColor = vec4(0.0);
+			int kernel = int(ceil(1.25*uBlurR+1));
+			float w0 = w0_n[int(uBlurR/0.5 - 1)];
+			
+			for (int i = 0; i < kernel*2 + 1; i++) {
+				for (int j = 0; j < kernel*2 + 1; j++) {
+					curColor = omw_GetLastShader(omw_TexCoord.xy + float(i - kernel)*xdisp + float(j - kernel)*ydisp);
+					float diff = abs(pixelColor.r - curColor.r) + abs(pixelColor.g - curColor.g) + abs(pixelColor.b - curColor.b);
+					blurColor += mix(curColor, pixelColor, saturate(pow(diff*uGradThres,3)))*(w0*exp(-(pow(float(i - kernel), 2) + pow(float(j - kernel), 2))/(2.0*uBlurR*uBlurR)));
+				}
+			}
+			outcolor = ((-grad*uEdgeColorAmount + 10*grad*blurColor*(1 - uDetail)) + blurColor);
+		}
+		else {
+			outcolor = ((-grad*uEdgeColorAmount + 10*grad*pixelColor*(1 - uDetail)) + pixelColor);
+		}
+		
+        outcolor.a = pixelColor.a;
+        omw_FragColor = outcolor;
+    }
+}
+
+fragment downsample(){
+	omw_In vec2 omw_TexCoord;
+	
+	void main()
+	{
+		if (uEnableHQBlur || !uEnableBlur) {
+			omw_FragColor = omw_GetLastPass(omw_TexCoord);
+			return;
+		}
+		vec2 uv = omw_TexCoord.xy*1.5;
+		vec2 halfpixel = 0.5/(omw.resolution.xy/1.5);
+		vec4 pixelColor = omw_GetLastPass(uv);
+		
+		vec4 sum = pixelColor*4.0;
+		sum += EdgeSmartMix(pixelColor, omw_GetLastPass(uv - halfpixel.xy * uBlurR/2));
+		sum += EdgeSmartMix(pixelColor, omw_GetLastPass(uv + halfpixel.xy * uBlurR/2));
+		sum += EdgeSmartMix(pixelColor, omw_GetLastPass(uv + vec2(halfpixel.x, -halfpixel.y) * uBlurR/2));
+		sum += EdgeSmartMix(pixelColor, omw_GetLastPass(uv - vec2(halfpixel.x, -halfpixel.y) * uBlurR/2));
+
+		omw_FragColor = sum/8.0;
+	}
+}
+
+fragment upsample(){
+	omw_In vec2 omw_TexCoord;
+	
+	void main()
+	{
+		if (uEnableHQBlur || !uEnableBlur) {
+			omw_FragColor = omw_GetLastPass(omw_TexCoord);
+			return;
+		}
+		vec2 uv = omw_TexCoord.xy/1.5;
+		vec2 halfpixel = 0.5/(omw.resolution.xy*1.5);
+		vec4 pixelColor = omw_GetLastPass(uv);
+		
+		vec4 sum = EdgeSmartMix(pixelColor, omw_GetLastPass(uv + vec2(-halfpixel.x * 2.0, 0.0) * uBlurR/2));	
+		sum += EdgeSmartMix(pixelColor, omw_GetLastPass(uv + vec2(-halfpixel.x, halfpixel.y) * uBlurR/2))*2.0;
+		sum += EdgeSmartMix(pixelColor, omw_GetLastPass(uv + vec2(0.0, halfpixel.y * 2.0) * uBlurR/2));
+		sum += EdgeSmartMix(pixelColor, omw_GetLastPass(uv + vec2(halfpixel.x, halfpixel.y) * uBlurR/2))*2.0;	
+		sum += EdgeSmartMix(pixelColor, omw_GetLastPass(uv + vec2(halfpixel.x * 2.0, 0.0) * uBlurR/2));
+		sum += EdgeSmartMix(pixelColor, omw_GetLastPass(uv + vec2(halfpixel.x, -halfpixel.y) * uBlurR/2))*2.0;	
+		sum += EdgeSmartMix(pixelColor, omw_GetLastPass(uv + vec2(0.0, -halfpixel.y * 2.0) * uBlurR/2));
+		sum += EdgeSmartMix(pixelColor, omw_GetLastPass(uv + vec2(-halfpixel.x, -halfpixel.y) * uBlurR/2))*2.0;	
+
+		omw_FragColor = sum/12.0;
+	}
+}
+
+fragment main {
+	omw_In vec2 omw_TexCoord;
+
+	void main()
+	{
+		if (uEnableHQBlur || !uEnableBlur){
+			omw_FragColor = omw_GetLastPass(omw_TexCoord);
+			return;
+		}
+		
+		vec3 scene = omw_GetLastShader(omw_TexCoord).rgb;
+		vec3 blur = omw_GetLastPass(omw_TexCoord).rgb;
+		
+		vec4 col = vec4(mix(scene, blur, uStrength), 1.0);
+		omw_FragColor = col;
+
+	}
+}
+
+technique {
+    passes = downsample, downsample, upsample, upsample, main, sobel;
+    description = "Contains two configurable filters. A Sobel filter for edge detection and an edge-preserving blur for a watercolor-like effect.";
+    author = "real_fargoth";
+    version = "1.0";
+}
